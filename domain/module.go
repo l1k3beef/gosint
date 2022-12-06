@@ -6,20 +6,26 @@ import (
 )
 
 type DomainModuler interface {
-	Init(interface{})
+	Parse(option interface{})
 	Run()
 }
 
 type DomainModule struct {
 	wg            sync.WaitGroup
 	EnabledMethod []string
+	*DomainModuleOption
+}
+
+type DomainModuleOption struct {
+	RootDomain          string
+	CachedResults       SubdomainResult
+	SubdomainResultChan chan SubdomainResult
 }
 
 var RegisteredModule = make(map[string]reflect.Type)
 
-func CreateDomainModule(moduleName string) (m DomainModuler) {
-	m = reflect.New(RegisteredModule[moduleName]).Interface().(DomainModuler)
-	return
+func (dm *DomainModule) Parse(option interface{}) {
+	dm.DomainModuleOption = option.(*DomainModuleOption)
 }
 
 func (dm *DomainModule) Run() {
@@ -30,8 +36,8 @@ func (dm *DomainModule) Run() {
 			dm.wg.Add(1)
 			go func() {
 				defer dm.wg.Done()
+				dm.wg.Add(1)
 				method.Call(nil)
-
 			}()
 		}
 	}

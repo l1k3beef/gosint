@@ -4,43 +4,39 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
-	"sync"
 )
 
 // DomainSearcher 通过搜索引擎搜集子域名
 type DomainSearcher struct {
-	wg sync.WaitGroup
-	*GosintDomainArgument
-
+	*DomainModule
 	*http.Client
 	*DomainSearcherOption
 }
 
 // DomainSearcherOption 用户配置项
 type DomainSearcherOption struct {
-	Enabled     []string
-	Headers     map[string]string
-	Proxy       string
-	BaiduCookie string
-	BingCookie  string
-	FofaEmail   string
-	FofaKey     string
+	EnabledMethod []string
+	Headers       map[string]string
+	Proxy         string
+	BaiduCookie   string
+	BingCookie    string
+	FofaEmail     string
+	FofaKey       string
 }
 
-// CreateDomainSearcher 用来创建DomainSearcher实例的方法, 推荐使用
-func CreateDomainSearcher(arg *GosintDomainArgument, opt *DomainSearcherOption) (ds *DomainSearcher) {
-	ds = &DomainSearcher{
-		GosintDomainArgument: arg,
-	}
+func (ds *DomainSearcher) Parse(option interface{}) {
+	ds.DomainSearcherOption, _ = option.(*DomainSearcherOption)
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
-
-	ds.DomainSearcherOption = opt
+	if ds.Proxy != "" {
+		uri, _ := url.Parse(ds.Proxy)
+		transport.Proxy = http.ProxyURL(uri)
+	}
 	if ds.Headers == nil {
 		defaultHeaders := map[string]string{
 			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.5359.95 Safari/537.36",
@@ -48,19 +44,23 @@ func CreateDomainSearcher(arg *GosintDomainArgument, opt *DomainSearcherOption) 
 		}
 		ds.Headers = defaultHeaders
 	}
-
-	if opt.Proxy != "" {
-		uri, _ := url.Parse(opt.Proxy)
-		transport.Proxy = http.ProxyURL(uri)
+	// 默认使用所有UseXXX的功能
+	if len(ds.DomainSearcherOption.EnabledMethod) == 0 {
+		ref := reflect.ValueOf(ds)
+		count := ref.NumMethod()
+		for i := 0; i < count; i++ {
+			name := ref.Method(i).Type().Name()
+			if strings.HasPrefix(name, "Use") {
+				ds.DomainModule.EnabledMethod = append(ds.DomainModule.EnabledMethod, name[3:])
+			}
+		}
+	} else {
+		ds.DomainModule.EnabledMethod = ds.DomainSearcherOption.EnabledMethod
 	}
 
 	ds.Client = &http.Client{
 		Transport: transport,
 	}
-
-	ds.wg = sync.WaitGroup{}
-
-	return
 }
 
 func (ds *DomainSearcher) UseGoogleAPI() {
@@ -144,7 +144,7 @@ func (ds *DomainSearcher) doSearch(req *http.Request) (sr SubdomainResult) {
 		fmt.Println(err)
 		return
 	}
-	content, err := ioutil.ReadAll(res.Body)
+	content, err := io.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -165,25 +165,4 @@ func (ds *DomainSearcher) doSearch(req *http.Request) (sr SubdomainResult) {
 	}
 	ds.SubdomainResultChan <- sr
 	return
-}
-
-// Run 调用所有支持的搜索接口
-func (ds *DomainSearcher) Run() {
-	defer func() {
-		ds.ModuleFinishedSignal <- struct{}{}
-	}()
-
-	ref := reflect.ValueOf(ds)
-	for _, m := range ds.Enabled {
-		method := ref.MethodByName("Use" + m)
-		if method.Kind() == reflect.Func {
-			ds.wg.Add(1)
-			go func() {
-				defer ds.wg.Done()
-				method.Call(nil)
-
-			}()
-		}
-	}
-	ds.wg.Wait()
 }

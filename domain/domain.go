@@ -2,40 +2,38 @@ package domain
 
 import (
 	"reflect"
+	"sync"
 	"time"
 )
 
+// GosintDomain 公开信息搜集子域名
 type GosintDomain struct {
-	GosintDomainArgument
+	wg                 sync.WaitGroup
 	RunningModuleCount int
+	StoppedSignal      chan struct{}
+
 	*GosintDomainOption
 }
 
-// GosintDomainArgument 多线程通信所需要的变量
-//
-// CachedResults非线程安全, 仅提供给DomainGuesser只读权限
-type GosintDomainArgument struct {
-	RootDomain           string
-	CachedResults        SubdomainResult
-	SubdomainResultChan  chan SubdomainResult
-	ModuleFinishedSignal chan struct{}
-}
-
+// GosintDomainOption 用户配置项
 type GosintDomainOption struct {
 	Standardized     bool     `desc:"是否对扫描结果标准化处理"`
 	LimitCachedSize  int      `desc:"限制缓存结果的数量"`
 	LimitChannelSize int      `desc:"限制子模块交互通道的数量"`
 	EnabledModule    []string `desc:"开启的子模块列表"`
 
+	*DomainModuleOption
 	*DomainSearcherOption
 	*DomainGuesserOption
 }
 
+// StandardSubdomainResult 标准化后的子域名搜集结果
 type StandardSubdomainResult struct {
 	DomainName string
 	ResovledIP string
 }
 
+// SubdomainResult 简化的子域名搜集结果
 type SubdomainResult map[string]struct{}
 
 // CreateGosintDomain 用来创建GosintDomain实例的方法, 推荐使用
@@ -43,7 +41,6 @@ func CreateGosintDomain(root string, opt *GosintDomainOption) (gd *GosintDomain)
 	gd.registerModule()
 	gd = &GosintDomain{}
 	gd.GosintDomainOption = opt
-	gd.RootDomain = root
 
 	gd.initSubdomainResultChan()
 	gd.CachedResults = make(SubdomainResult)
@@ -86,24 +83,52 @@ func (gd *GosintDomain) Persistence() {
 // PermissiveOptionCheck 对用户配置项进行宽松的检查
 func (gd *GosintDomain) PermissiveOptionCheck() (ok bool) {
 	if len(gd.EnabledModule) == 0 {
+		Log.Warn("最少启用一个子域名探测模块")
 		return false
 	}
 
+	for _, moduleName := range gd.EnabledModule {
+		option := gd.GetDomainModuleOption(moduleName)
+		if option == nil {
+			Log.Warnf("找不到模块:%v对应的配置项", moduleName)
+			return false
+		}
+	}
+
+	Log.Info("用户配置项检查通过")
 	return true
+}
+
+// CreateDomainModule 创建子域名搜集模块的工厂方法
+func (gd *GosintDomain) CreateDomainModule(moduleName string) (m DomainModuler) {
+	m = reflect.New(RegisteredModule[moduleName]).Interface().(DomainModuler)
+	option := gd.GetDomainModuleOption("DomainModule")
+	m.Parse(option)
+	return
+}
+
+// GetDomainModuleOption 动态获取参数中的用户配置项
+func (gd *GosintDomain) GetDomainModuleOption(moduleName string) (option interface{}) {
+	ref := reflect.ValueOf(gd.GosintDomainOption)
+	option = ref.FieldByName(moduleName + "Option").Interface()
+	return
 }
 
 // Start 开始子域名搜集
 func (gd *GosintDomain) Start() {
+	Log.Info("子域名搜集开始")
 	if !gd.PermissiveOptionCheck() {
 		return
 	}
 
 	for _, moduleName := range gd.EnabledModule {
-		ref := reflect.ValueOf(gd.GosintDomainOption)
-		option := ref.FieldByName(moduleName + "Option").Interface()
-		m := CreateDomainModule(moduleName)
+
+		option := gd.GetDomainModuleOption(moduleName)
+		m := gd.CreateDomainModule(moduleName)
 		go func() {
-			m.Init(option)
+			defer gd.wg.Done()
+			gd.wg.Add(1)
+			m.Parse(option)
 			m.Run()
 		}()
 	}
@@ -111,18 +136,19 @@ func (gd *GosintDomain) Start() {
 	go func() {
 		defer func() {
 			gd.Persistence()
+			Log.Info("子域名搜集结束")
 		}()
 
 		select {
 		case sr := <-gd.SubdomainResultChan:
 			gd.Deduplicate(sr)
-		case <-gd.ModuleFinishedSignal:
-			if gd.RunningModuleCount--; gd.RunningModuleCount <= 0 {
-				// 保证退出之前SubdomainResultChan没有内容
-				return
-			}
+		case <-gd.StoppedSignal:
+			return
 		default:
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
+
+	gd.wg.Wait()
+	gd.StoppedSignal <- struct{}{}
 }

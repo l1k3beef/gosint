@@ -1,18 +1,11 @@
 package domain
 
 type DomainGuesser struct {
-	*GosintDomainArgument
+	*DomainModule
 }
 
 type DomainGuesserOption struct {
 	Enabled []string
-}
-
-func CreateDomainGuesser(arg *GosintDomainArgument, opt *DomainGuesserOption) (dg *DomainGuesser) {
-	dg = &DomainGuesser{
-		GosintDomainArgument: arg,
-	}
-	return
 }
 
 // UseDict 使用高频率的字典进行子域名猜测
