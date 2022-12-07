@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"reflect"
 	"regexp"
 	"strings"
 )
@@ -21,13 +20,12 @@ type DomainSearcher struct {
 
 // DomainSearcherOption 用户配置项
 type DomainSearcherOption struct {
-	EnabledMethod []string
-	Headers       map[string]string
-	Proxy         string
-	BaiduCookie   string
-	BingCookie    string
-	FofaEmail     string
-	FofaKey       string
+	Headers     map[string]string
+	Proxy       string
+	BaiduCookie string
+	BingCookie  string
+	FofaEmail   string
+	FofaKey     string
 }
 
 func (ds *DomainSearcher) Parse(option interface{}) {
@@ -43,19 +41,6 @@ func (ds *DomainSearcher) Parse(option interface{}) {
 			"Accept":     "*/*",
 		}
 		ds.Headers = defaultHeaders
-	}
-	// 默认使用所有UseXXX的功能
-	if len(ds.DomainSearcherOption.EnabledMethod) == 0 {
-		ref := reflect.ValueOf(ds)
-		count := ref.NumMethod()
-		for i := 0; i < count; i++ {
-			name := ref.Method(i).Type().Name()
-			if strings.HasPrefix(name, "Use") {
-				ds.DomainModule.EnabledMethod = append(ds.DomainModule.EnabledMethod, name[3:])
-			}
-		}
-	} else {
-		ds.DomainModule.EnabledMethod = ds.DomainSearcherOption.EnabledMethod
 	}
 
 	ds.Client = &http.Client{
@@ -125,6 +110,7 @@ func (ds *DomainSearcher) UseBaidu() {
 	// wd: 关键词 pn: 跳过的数量 rn: 每页显示数量
 	wd := fmt.Sprintf("site:.%v", ds.RootDomain)
 	rn := 50
+	cookies := []*http.Cookie{}
 	for pn := 0; ; pn += rn {
 		api := fmt.Sprintf("https://www.baidu.com/s?wd=%v&pn=%v&rn=%v", wd, pn, rn)
 		req, _ := http.NewRequest("GET", api, nil)
@@ -134,23 +120,32 @@ func (ds *DomainSearcher) UseBaidu() {
 		if ds.BaiduCookie != "" {
 			req.Header.Add("Cookie", ds.BaiduCookie)
 		}
-		ds.doSearch(req)
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		n, res := ds.doSearch(req)
+		if n == 0 {
+			break
+		}
+		if len(res.Cookies()) > 0 {
+			cookies = append(cookies, res.Cookies()...)
+		}
 	}
 }
 
-func (ds *DomainSearcher) doSearch(req *http.Request) (sr SubdomainResult) {
+func (ds *DomainSearcher) doSearch(req *http.Request) (int, *http.Response) {
 	res, err := ds.Client.Do(req)
 	if err != nil {
-		fmt.Println(err)
-		return
+		Log.Warn(err)
+		return 0, res
 	}
 	content, err := io.ReadAll(res.Body)
 	if err != nil {
-		fmt.Println(err)
-		return
+		Log.Warn(err)
+		return 0, res
 	}
 
-	sr = make(SubdomainResult)
+	sr := make(SubdomainResult)
 	pattern := strings.ReplaceAll(ds.RootDomain, ".", "\\.")
 	re := regexp.MustCompile("[-\\w\\.]+" + pattern)
 	all := re.FindAllString(string(content), -1)
@@ -163,6 +158,9 @@ func (ds *DomainSearcher) doSearch(req *http.Request) (sr SubdomainResult) {
 		}
 		sr[v] = struct{}{}
 	}
-	ds.SubdomainResultChan <- sr
-	return
+	n := len(sr)
+	if n > 0 {
+		ds.SubdomainResultChan <- sr
+	}
+	return n, res
 }
