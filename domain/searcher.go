@@ -145,7 +145,7 @@ func (ds *DomainSearcher) doSearch(req *http.Request) (int, *http.Response) {
 		return 0, res
 	}
 
-	sr := make(SubdomainResult)
+	sr := make(SimpleDomainResult)
 	pattern := strings.ReplaceAll(ds.RootDomain, ".", "\\.")
 	re := regexp.MustCompile("[-\\w\\.]+" + pattern)
 	all := re.FindAllString(string(content), -1)

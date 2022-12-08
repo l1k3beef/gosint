@@ -19,8 +19,8 @@ type DomainModule struct {
 // DomainModuleOption 子模块交互信息
 type DomainModuleOption struct {
 	RootDomain          string
-	CachedResults       SubdomainResult `desc:"子模块对缓存结果只有只读权限"`
-	SubdomainResultChan chan SubdomainResult
+	CachedResults       SimpleDomainResult `desc:"子模块对缓存结果只有只读权限"`
+	SubdomainResultChan chan SimpleDomainResult
 }
 
 var RegisteredModule = make(map[string]reflect.Type)
@@ -44,4 +44,8 @@ func (dm *DomainModule) Run(this interface{}) {
 		}
 	}
 	dm.wg.Wait()
+}
+
+func isValid() {
+
 }

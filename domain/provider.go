@@ -96,7 +96,7 @@ func (dp *DomainProvider) doRequest(req *http.Request) (int, *http.Response) {
 		return 0, res
 	}
 
-	sr := make(SubdomainResult)
+	sr := make(SimpleDomainResult)
 	pattern := strings.ReplaceAll(dp.RootDomain, ".", "\\.")
 	re := regexp.MustCompile("[-\\w\\.]+" + pattern)
 	all := re.FindAllString(string(content), -1)
